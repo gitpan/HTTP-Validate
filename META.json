@@ -1,0 +1,49 @@
+{
+   "abstract" : "validate and clean HTTP parameter values according to a set of rules",
+   "author" : [
+      "Michael McClennen <mmcclenn@geology.wisc.edu>"
+   ],
+   "dynamic_config" : 1,
+   "generated_by" : "Module::Build version 0.4205",
+   "license" : [
+      "perl_5"
+   ],
+   "meta-spec" : {
+      "url" : "http://search.cpan.org/perldoc?CPAN::Meta::Spec",
+      "version" : "2"
+   },
+   "name" : "HTTP-Validate",
+   "prereqs" : {
+      "build" : {
+         "requires" : {
+            "Test::More" : "0"
+         }
+      },
+      "configure" : {
+         "requires" : {
+            "Module::Build" : "0.42"
+         }
+      },
+      "runtime" : {
+         "requires" : {
+            "perl" : "v5.8.1"
+         }
+      }
+   },
+   "provides" : {
+      "HTTP::Validate" : {
+         "file" : "lib/HTTP/Validate.pm",
+         "version" : "0.40"
+      },
+      "HTTP::Validate::Result" : {
+         "file" : "lib/HTTP/Validate.pm"
+      }
+   },
+   "release_status" : "stable",
+   "resources" : {
+      "license" : [
+         "http://dev.perl.org/licenses/"
+      ]
+   },
+   "version" : "0.40"
+}
