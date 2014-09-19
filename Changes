@@ -1,5 +1,5 @@
 Revision history for HTTP-Validate
 
-0.01    Date/time
-        First version, released on an unsuspecting world.
+0.42    2014-06-16 03:53:04 UTC
+	Fixed a bug which was causing crashes with constraint rules.
 

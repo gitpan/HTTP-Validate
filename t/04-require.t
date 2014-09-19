@@ -1,9 +1,9 @@
-#!perl 
+#!perl
 # 
 # This file tests for proper handling of 'allow' and 'require' rules.
 
 use strict;
-use Test::More tests => 17;
+use Test::More tests => 19;
 
 use HTTP::Validate qw(:keywords :validators);
 
@@ -99,3 +99,12 @@ is( $result6->value('baz'), 2, 'allow both, second param' );
 is( scalar(@errors7), 0, 'allow both, empty params' );
 is( scalar($result7->keys), 0, 'allow both, param result' );
 
+my (@result8);
+
+eval {
+    @result8 = list_params('allowBoth');
+};
+
+ok( !$@, 'list params' ) or diag( "    message was: $@");
+
+is( join(',', @result8), "foo,bar,bif,baz,buz", 'list params result' );

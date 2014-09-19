@@ -7,7 +7,6 @@ use feature 'unicode_strings';
 use Exporter qw( import );
 use Carp qw( carp croak );
 use Scalar::Util qw( reftype weaken blessed looks_like_number );
-use Storable qw( dclone );
 
 # Check for the existence of the 'fc' function.  If it exists, we can use it
 # for casefolding enum values.  Otherwise, we default to 'lc'.
@@ -16,16 +15,36 @@ my $case_fold = $] >= 5.016		    ? eval 'sub { return CORE::fc $_[0] }'
 	      : $INC{'Unicode/CaseFold.pm'} ? eval 'sub { return Unicode:CaseFold::fc $_[0] }'
 	      : 			      eval 'sub { return lc $_[0] }';
 
-
-our $VERSION = '0.40';
+our $VERSION = '0.44';
 
 =head1 NAME
 
 HTTP::Validate - validate and clean HTTP parameter values according to a set of rules
 
-=head1 VERSION
+Version 0.44
 
-Version 0.4
+=head1 DESCRIPTION
+
+This module provides validation of HTTP request parameters against a set of
+clearly defined rules.  It is designed to work with L<Dancer>, L<Mojolicious>,
+L<Mason>, and similar web application frameworks, both for interactive apps
+and for data services.  It can also be used with L<CGI>, although the use of
+L<CGI::Fast> or another similar solution is recommended to avoid paying the
+penalty of loading this module and initializing all of the rulesets over again
+for each request.  Both an object-oriented interface and a procedural
+interface are provided.
+
+The rule definition mechanism is very flexible.  A ruleset can be defined once
+and used with multiple URL paths, and rulesets can be combined using the rule
+types C<require> and C<allow>.  This allows a complex application that accepts
+many different paths to apply common rule patterns.  If the parameters fail
+the validation test, an error message is provided which tells the client how
+to amend the request in order to make it valid.  A suite of built-in validator
+functions is available, and you can also define your own.
+
+This module also provides a mechanism for generating documentation about the
+parameter rules.  The documentation is generated in Pod format, which can
+then be converted to HTML, TeX, nroff, etc. as needed.
 
 =head1 SYNOPSIS
 
@@ -79,29 +98,6 @@ Version 0.4
     
     # Otherwise, $result->values will return the cleaned parameter
     # values for use in processing the request.
-
-=head1 DESCRIPTION
-
-This module provides validation of HTTP request parameters against a set of
-clearly defined rules.  It is designed to work with L<Dancer>, L<Mojolicious>,
-L<Mason>, and similar web application frameworks, both for interactive apps
-and for data services.  It can also be used with L<CGI>, although the use of
-L<CGI::Fast> or another similar solution is recommended to avoid paying the
-penalty of loading this module and initializing all of the rulesets over again
-for each request.  Both an object-oriented interface and a procedural
-interface are provided.
-
-The rule definition mechanism is very flexible.  A ruleset can be defined once
-and used with multiple URL paths, and rulesets can be combined using the rule
-types C<require> and C<allow>.  This allows a complex application that accepts
-many different paths to apply common rule patterns.  If the parameters fail
-the validation test, an error message is provided which tells the client how
-to amend the request in order to make it valid.  A suite of built-in validator
-functions is available, and you can also define your own.
-
-This module also provides a mechanism for generating documentation about the
-parameter rules.  The documentation is generated in Pod format, which can
-then be converted to HTML, TeX, nroff, etc. as needed.
 
 =head1 THE VALIDATION PROCESS
 
@@ -498,6 +494,17 @@ listref for multiple aliases).  These names may be used interchangeably in
 requests, but any request that contains more than one of them will be rejected
 with an appropriate error message unless L</multiple> is also specified.
 
+=head3 clean
+
+This directive specifies a subroutine which will be used to modify the
+parameter values.  This routine will be called with the raw value of the
+parameter named in this rule as its only argument, or once for each value if
+the multiple values are allowed.  The resulting values will be stored as the
+"cleaned" values.  The value of this directive may be a code ref, or one of
+the strings 'uc', 'lc' or 'fc'.  These direct that the parameter values be
+converted to uppercase, lowercase, or L<fold case|Unicode::Casefold>
+respectively.
+
 =head3 default
 
 This directive specifies a default value for the parameter, which will be
@@ -587,21 +594,21 @@ BEGIN {
 
     @EXPORT_OK = qw(
 	define_ruleset check_params validation_settings ruleset_defined document_params
-	ruleset validate_params
+	list_params 
 	INT_VALUE POS_VALUE POS_ZERO_VALUE
 	DECI_VALUE
 	ENUM_VALUE
 	BOOLEAN_VALUE
 	MATCH_VALUE
-	FLAG_VALUE EMPTY_VALUE ANY_VALUE
+	FLAG_VALUE ANY_VALUE
     );
     
     @VALIDATORS = qw(INT_VALUE POS_VALUE POS_ZERO_VALUE DECI_VALUE
-		     ENUM_VALUE MATCH_VALUE BOOLEAN_VALUE FLAG_VALUE EMPTY_VALUE ANY_VALUE);
+		     ENUM_VALUE MATCH_VALUE BOOLEAN_VALUE FLAG_VALUE ANY_VALUE);
 
     %EXPORT_TAGS = (
 	keywords => [qw(define_ruleset check_params validation_settings ruleset_defined document_params
-		        ruleset validate_params)],
+		        list_params)],
 	validators => \@VALIDATORS,
     );
 };
@@ -804,6 +811,10 @@ settings include:
 
 If specified, then unrecognized parameters will generate warnings instead of errors.
 
+=item ignore_unrecognized
+
+If specified, then unrecognized parameters will be ignored entirely.
+
 =back
 
 =cut
@@ -823,6 +834,11 @@ sub validation_settings {
 	if ( $key eq 'allow_unrecognized' )
 	{
 	    $self->{SETTINGS}{permissive} = $value ? 1 : 0;
+	}
+	
+	elsif ( $key eq 'ignore_unrecognized' )
+	{
+	    $self->{SETTINGS}{ignore_unrecognized} = $value ? 1 : 0;
 	}
 	
 	else
@@ -892,11 +908,9 @@ sub document_params {
     
     my ($ruleset_name) = @_;
     
-    # Make sure we have a valid ruleset name.
+    # Make sure we have a valid ruleset, or else return false.
     
-    croak "document_params requires a ruleset name" unless defined $ruleset_name;
-    
-    # Look for the specified ruleset, or else return false.
+    return unless defined $ruleset_name;
     
     my $rs = $self->{RULESETS}{$ruleset_name};
     return unless $rs;
@@ -904,6 +918,41 @@ sub document_params {
     # Now generate the requested documentation.
     
     return $self->generate_docstring($rs, { in_list => 0, level => 0, processed => {} });
+}
+
+
+=head3 list_params 
+
+This function returns a list of the names of all parameters accepted by the
+specified ruleset, including those accepted by included rulesets.
+
+    my @parameter_names = list_ruleset_params($ruleset_name);
+
+This may be useful if your validations allow unrecognized parameters, as it
+enables you to determine which of the parameters in a given request are
+significant to that request.
+
+=cut
+
+sub list_params {
+
+    # If we were called as a method, use the object on which we were called.
+    # Otherwise, use the globally defined instance.
+    
+    my $self = ref $_[0] eq 'HTTP::Validate' ? shift : $DEFAULT_INSTANCE;
+    
+    my ($ruleset_name) = @_;
+    
+    # Make sure we have a valid ruleset, or else return false.
+    
+    return unless defined $ruleset_name;
+    
+    my $rs = $self->{RULESETS}{$ruleset_name};
+    return unless $rs;
+    
+    # Now generate the requested list.
+    
+    return $self->generate_param_list($ruleset_name);
 }
 
 
@@ -954,9 +1003,9 @@ my %DIRECTIVE = ( 'param' => 2, 'optional' => 2, 'mandatory' => 2,
 		  'together' => 2, 'at_most_one' => 2, 'ignore' => 2,
 		  'require' => 2, 'allow' => 2, 'require_one' => 2,
 		  'require_any' => 2, 'allow_one' => 2, 'content_type' => 2,
-		  'valid' => 1, 'bad_value' => 1,
+		  'valid' => 1, 'bad_value' => 1, 'clean' => 1,
 		  'multiple' => 1, 'split' => 1, 'list' => 1,
-		  'errmsg' => 1, 'warn' => 1, 
+		  'error' => 1, 'errmsg' => 1, 'warn' => 1, 
 		  'alias' => 1, 'key' => 1, 'default' => 1);
 
 # Categorize the rule types
@@ -976,7 +1025,12 @@ my %CATEGORY = ( 'param' => 'param',
 
 # List the special validators.
 
-my (%VALIDATOR_DEF) = ( 'FLAG_VALUE' => undef, 'EMPTY_VALUE' => \&empty_value, 'ANY_VALUE' => undef );
+my (%VALIDATOR_DEF) = ( 'FLAG_VALUE' => 1, # 'EMPTY_VALUE' => 1, 
+			'ANY_VALUE' => 1 );
+
+my (%CLEANER_DEF) = ( 'uc' => eval 'sub { return uc $_[0] }',
+		      'lc' => eval 'sub { return lc $_[0] }',
+		      'fc' => $case_fold );
 
 # add_rules ( ruleset, rule ... )
 # 
@@ -1124,6 +1178,17 @@ sub add_rules {
 		$rr->{alias} = ref $value ? $value : [ $value ];
 	    }
 	    
+	    elsif ( $key eq 'clean' )
+	    {
+		croak "they key 'clean' is only allowed with parameter rules"
+		    unless $CATEGORY{$type} eq 'param';
+		
+		$rr->{cleaner} = $CLEANER_DEF{$value} || $value;
+		
+		croak "invalid value '$value' for 'clean'"
+		    unless ref $rr->{cleaner} eq 'CODE';
+	    }
+	    
 	    elsif ( $key eq 'default' )
 	    {
 		croak "the key 'default' is only allowed with parameter rules"
@@ -1148,11 +1213,16 @@ sub add_rules {
 		
 		unless ( ref $value )
 		{
-		    $value = qr{\s*$value\s*}o;
+		    $value = qr{ \s* $value \s* }oxs;
 		}
 		
 		$rr->{split} = $value;
 		$rr->{warn} = 1 if $key eq 'list';
+	    }
+	    
+	    elsif ( $key eq 'error' || $key eq 'errmsg' )
+	    {
+		$rr->{errmsg} = $rr->{$key};
 	    }
 	    
 	    elsif ( $key ne $type )
@@ -1198,13 +1268,13 @@ sub add_rules {
 	    
 	    foreach my $v (@validators)
 	    {
-		# $$$$ investigate empty_value problem
-		
-		if ( defined $v && exists $VALIDATOR_DEF{$v} )
+		if ( defined $v && $VALIDATOR_DEF{$v} )
 		{
 		    $rr->{flag} = 1 if $v eq 'FLAG_VALUE';
-		    $rr->{empty_ok} = 1 if $v eq 'ANY_VALUE';
-		    push @{$rr->{validators}}, \&empty_value if $v eq 'EMPTY_VALUE';
+		    push @{$rr->{validators}}, \&boolean_value if $v eq 'FLAG_VALUE';
+		    
+		    #$rr->{empty_ok} = 1 if $v eq 'EMPTY_VALUE';
+		    #push @{$rr->{validators}}, \&empty_value if $v eq 'EMPTY_VALUE';
 		}
 		
 		elsif ( defined $v )
@@ -1232,6 +1302,8 @@ sub add_rules {
 	    
 	    if ( defined $rr->{default} )
 	    {
+		croak "default value must be a scalar\n" if ref $rr->{default};
+		
 		next RULE unless ref $rr->{validators} eq 'ARRAY' &&
 		    @{$rr->{validators}};
 		
@@ -1244,11 +1316,12 @@ sub add_rules {
 		    if ( exists $result->{value} )
 		    {
 			$rr->{default} = $result->{value};
+			croak "cleaned default value must be a scalar\n" if ref $rr->{default};
 			next RULE;
 		    }
 		}
 		
-		croak "the default value '$rr->{default}' failed all of the validators";
+		croak "the default value '$rr->{default}' failed all of the validators\n";
 	    }
 	}
 	
@@ -1286,7 +1359,7 @@ sub add_rules {
 	
 	elsif ( $CATEGORY{$type} eq 'constraint' )
 	{
-	    $rr->{type} = 'include';
+	    $rr->{type} = 'constraint';
 	    $rr->{constraint} = $type;
 	    $rr->{ruleset} = [];
 	    
@@ -1421,6 +1494,7 @@ sub add_doc {
     elsif ( defined $rr and $rr->{type} eq 'param' )
     {
 	push @{$rs->{doc_items}}, $rr;
+	weaken $rs->{doc_items}[-1];
 	push @{$rs->{doc_items}}, process_doc($body, 1);
     }
     
@@ -1485,7 +1559,7 @@ sub process_doc {
 }
 
 
-# get_docstring ( ruleset )
+# generate_docstring ( ruleset )
 # 
 # Generate the documentation string for the specified ruleset, recursively
 # evaluating all of the rulesets it includes.  This will generate a series of
@@ -1578,6 +1652,38 @@ sub generate_docstring {
     }
     
     return $doc;
+}
+
+
+# generate_param_list ( ruleset )
+# 
+# Generate a list of unique parameter names for the ruleset and its included
+# rulesets if any.
+
+sub generate_param_list {
+    
+    my ($self, $rs_name, $uniq) = @_;
+    
+    $uniq ||= {};
+    
+    return if $uniq->{$rs_name}; $uniq->{$rs_name} = 1;
+    
+    my @params;
+    
+    foreach my $rule ( @{$self->{RULESETS}{$rs_name}{rules}} )
+    {
+	if ( $rule->{type} eq 'param' )
+	{
+	    push @params, $rule->{param};
+	}
+	
+	elsif ( $rule->{type} eq 'include' )
+	{
+	    push @params, $self->generate_param_list($rule->{ruleset}, $uniq);
+	}
+    }
+    
+    return @params;
 }
 
 
@@ -1751,6 +1857,8 @@ sub execute_validation {
     # Now check for unrecognized parameters, and generate errors or warnings
     # for them.
     
+    return $result if $self->{SETTINGS}{ignore_unrecognized};
+    
     foreach my $key (keys %{$vr->{raw}})
     {
 	next if exists $vr->{ps}{$key} or exists $vr->{ig}{$key};
@@ -1861,8 +1969,7 @@ sub validate_ruleset {
 	    
 	    elsif ( ! @raw_values && exists $rr->{default} )
 	    {
-		$vr->{clean}{$key} = ref $rr->{default} ? 
-		    dclone($rr->{default}) : $rr->{default};
+		$vr->{clean}{$key} = $rr->{default};
 		next RULE;
 	    }
 	    
@@ -1888,26 +1995,26 @@ sub validate_ruleset {
 		@raw_values = @new_values;
 	    }
 	    
-	    # If this is a 'flag' parameter, then the raw value is 1 if the
-	    # parameter was mentioned at all.
+	    # If this is a 'flag' parameter and the parameter was present but
+	    # no values were given, assume the value '1'.
 	    
-	    if ( $rr->{flag} )
+	    if ( $rr->{flag} && @names_found && ! @raw_values )
 	    {
-		add_warning($vr, $rr, "parameter {param} is considered to be set just by including it in the request",
-			{ param => @names_found }) if @raw_values;
-		@raw_values = (1) if @names_found;
+		@raw_values = (1);
 	    }
 	    
-	    # At this point, if there are no values then generate an error if the
-	    # parameter is mandatory.  Otherwise just skip this parameter.
+	    # At this point, if there are no values then generate an error if
+	    # the parameter is mandatory.  Otherwise just skip this rule.
 	    
-	    if ( $rr->{mandatory} && ! @raw_values )
+	    unless ( @raw_values )
 	    {
 		add_error($vr, $rr, "you must specify a value for {param}", 
-			  { param => $rr->{param} }) if $rr->{mandatory};
+		      { param => $rr->{param} }) if $rr->{mandatory};
+		
+		# $vr->{rs}{$ruleset_name} = 2 if $rr->{empty_ok} && ! $rr->{optional};
+		
+		next RULE;
 	    }
-	    
-	    next unless @raw_values;
 	    
 	    # Now we process each value in turn.
 	    
@@ -1922,8 +2029,13 @@ sub validate_ruleset {
 		
 		unless ( $rr->{validators} )
 		{
-		    push @clean_values, $raw_val if defined $raw_val && $raw_val ne '';
-		    next;
+		    if ( defined $raw_val && $raw_val ne '' )
+		    {
+			$raw_val = $rr->{cleaner}($raw_val) if ref $rr->{cleaner} eq 'CODE';
+			push @clean_values, $raw_val;
+		    }
+		    
+		    next VALUE;
 		}
 		
 		# Otherwise, check each value against the validators in turn until
@@ -1987,7 +2099,14 @@ sub validate_ruleset {
 		# hash ref with a 'value' field, we use that for the clean
 		# value. Otherwise, we use the raw value.
 		
-		push @clean_values, ref $result && exists $result->{value} ? $result->{value} : $raw_val;
+		my $value = ref $result && exists $result->{value} ? $result->{value} : $raw_val;
+		
+		# If a cleaning subroutine was defined, pass the value through
+		# it and save the cleaned value.
+		
+		$value = $rr->{cleaner}($value) if ref $rr->{cleaner} eq 'CODE';
+		
+		push @clean_values, $value;
 	    }
 	    
 	    # If this rule allows multiple values, store a list if any
@@ -2017,7 +2136,7 @@ sub validate_ruleset {
 	    # If there were raw values but no clean values, and if this
 	    # rule includes a 'bad_value' key, then return its value.
 	    
-	    if ( @raw_values && defined $rr->{bad_value} )
+	    elsif ( @raw_values && defined $rr->{bad_value} )
 	    {
 		$vr->{clean}{$key} //= $rr->{bad_value};
 	    }
@@ -2754,11 +2873,10 @@ sub ENUM_VALUE {
 
 =head3 BOOLEAN_VALUE
 
-This validator is used for parameters that take a true/false value, where the
-absence of the parameter should be taken as "don't know" rather than as
-"false".  It accepts any of the following values: "yes", "no", "true",
-"false", "1", "0", compared case insensitively.  It returns a cleaned value of 1
-or 0, and generates an error if any other value is specified.
+This validator is used for parameters that take a true/false value.  It
+accepts any of the following values: "yes", "no", "true", "false", "on",
+"off", "1", "0", compared case insensitively.  It returns an error if any
+other value is specified.  The cleaned value will be 1 or 0.
 
 =cut
 
@@ -2766,25 +2884,20 @@ sub boolean_value {
 
     my ($value, $context) = @_;
     
-    if ( ref $value )
+    unless ( ref $value )
     {
-	return { error => "the value of {param} must one of: yes, no, true, false, 1, 0" };
+	if ( $value =~ /^(?:1|yes|true|on)$/i )
+	{
+	    return { value => 1 };
+	}
+	
+	elsif ( $value =~ /^(?:0|no|false|off)$/i )
+	{
+	    return { value => 0 };
+	}
     }
     
-    if ( $value =~ /^(?:1|yes|true)$/i )
-    {
-	return { value => 1 };
-    }
-    
-    elsif ( $value =~ /^(?:0|no|false)$/i )
-    {
-	return { value => 0 };
-    }
-    
-    else
-    {
-	return { error => "the value of {param} must be one of: yes, no, true, false, 1, 0" };
-    }
+    return { error => "the value of {param} must be one of: yes, no, true, false, on, off, 1, 0" };
 }
 
 sub BOOLEAN_VALUE { return \&boolean_value; };
@@ -2793,46 +2906,45 @@ sub BOOLEAN_VALUE { return \&boolean_value; };
 =head3 FLAG_VALUE
 
 This validator should be used for parameters that are considered to be "true"
-if specified at all and "false" if not.  This validator returns a value of 1
-if the parameter was provided in the request, and C<undef> if it was not.  A
-warning is generated if any value was provided for the parameter.
+if present with an empty value.  The validator returns a value of 1 in this case,
+and behaves like 'BOOLEAN_VALUE' otherwise.
 
 =cut
 
 sub FLAG_VALUE { return 'FLAG_VALUE'; };
 
 
-=head3 EMPTY_VALUE
+# =head3 EMPTY_VALUE
 
-This validator accepts only the empty value.  You can use this when you want a
-ruleset to be fulfilled even if the specified parameter is given an empty
-value.  This will typically be used along with at least one other validator for the
-same parameter.  For example:
+# This validator accepts only the empty value.  You can use this when you want a
+# ruleset to be fulfilled even if the specified parameter is given an empty
+# value.  This will typically be used along with at least one other validator for the
+# same parameter.  For example:
 
-    define_ruleset foo =>
-        { param => 'bar', valid => [EMPTY_VALUE, POS_VALUE] };
+#     define_ruleset foo =>
+#         { param => 'bar', valid => [EMPTY_VALUE, POS_VALUE] };
 
-This rule would be satisfied if the parameter 'bar' is given either an empty
-value or a value that is a positive integer.  The ruleset will be fulfilled in
-either case, but will not be fulfilled if 'bar' is not mentioned at all.  For
-best results EMPTY_VALUE should not be the last validator in the list, because
-if a value fails all of the validators then the last error message is reported
-and its error message is by necessity not very helpful.
+# This rule would be satisfied if the parameter 'bar' is given either an empty
+# value or a value that is a positive integer.  The ruleset will be fulfilled in
+# either case, but will not be fulfilled if 'bar' is not mentioned at all.  For
+# best results EMPTY_VALUE should not be the last validator in the list, because
+# if a value fails all of the validators then the last error message is reported
+# and its error message is by necessity not very helpful.
 
-=cut
+# =cut
 
-sub empty_value {
+# sub empty_value {
     
-    my ($value, $context) = @_;
+#     my ($value, $context) = @_;
     
-    return if !defined $value || $value eq '';
-    return { error => "parameter {param} must be empty unless it is given a valid value" };
-}
+#     return if !defined $value || $value eq '';
+#     return { error => "parameter {param} must be empty unless it is given a valid value" };
+# }
 
-sub EMPTY_VALUE {
+# sub EMPTY_VALUE {
 
-    return 'EMPTY_VALUE';
-};
+#     return 'EMPTY_VALUE';
+# };
 
 
 =head3 ANY_VALUE

@@ -33,7 +33,7 @@
    "provides" : {
       "HTTP::Validate" : {
          "file" : "lib/HTTP/Validate.pm",
-         "version" : "0.40"
+         "version" : "0.44"
       },
       "HTTP::Validate::Result" : {
          "file" : "lib/HTTP/Validate.pm"
@@ -45,5 +45,5 @@
          "http://dev.perl.org/licenses/"
       ]
    },
-   "version" : "0.40"
+   "version" : "0.44"
 }

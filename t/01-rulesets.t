@@ -193,7 +193,6 @@ eval {
         { param => 'bool', valid => BOOLEAN_VALUE },
 	{ param => 'flag', valid => FLAG_VALUE },
         { param => 'string', valid => MATCH_VALUE(qr{^[ a-zA-Z]+$}) },
-        { param => 'empty', valid => EMPTY_VALUE },
 	{ param => 'any', valid => ANY_VALUE };
 };
 
@@ -289,7 +288,7 @@ ok( !$@, 'test rulesets' ) or diag("    message was; $@" );
 
 eval {
     define_ruleset 'allow rule bad' =>
-	{ 'allow' };
+	{ 'allow' => undef };
 };
 
 ok( $@, 'allow rule bad');
