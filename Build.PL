@@ -14,7 +14,9 @@ my $builder = Module::Build->new(
     requires => {
         'perl' => '5.8.1',
     },
-    add_to_cleanup      => [ 'HTTP-Validate-*' ],
+    recommends => {
+	'Unicode::CaseFold' => 0,
+    },
     create_makefile_pl => 'traditional',
 );
 

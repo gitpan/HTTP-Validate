@@ -16,11 +16,13 @@ name: HTTP-Validate
 provides:
   HTTP::Validate:
     file: lib/HTTP/Validate.pm
-    version: '0.44'
+    version: '0.45'
   HTTP::Validate::Result:
     file: lib/HTTP/Validate.pm
+recommends:
+  Unicode::CaseFold: '0'
 requires:
   perl: v5.8.1
 resources:
   license: http://dev.perl.org/licenses/
-version: '0.44'
+version: '0.45'

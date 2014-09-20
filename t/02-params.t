@@ -34,7 +34,7 @@ eval {
      
      define_ruleset 'split params' =>
 	 { optional => 'foo', split => ',' },
-	 { optional => 'bar', split => qr{ : } };
+	 { optional => 'bar', split => qr/ : / };
      
      define_ruleset 'empty params' => 
 	 { optional => 'foo', valid => FLAG_VALUE },

@@ -2,7 +2,6 @@ package HTTP::Validate;
 
 use strict;
 use warnings;
-use feature 'unicode_strings';
 
 use Exporter qw( import );
 use Carp qw( carp croak );
@@ -15,13 +14,13 @@ my $case_fold = $] >= 5.016		    ? eval 'sub { return CORE::fc $_[0] }'
 	      : $INC{'Unicode/CaseFold.pm'} ? eval 'sub { return Unicode:CaseFold::fc $_[0] }'
 	      : 			      eval 'sub { return lc $_[0] }';
 
-our $VERSION = '0.44';
+our $VERSION = '0.45';
 
 =head1 NAME
 
 HTTP::Validate - validate and clean HTTP parameter values according to a set of rules
 
-Version 0.44
+Version 0.45
 
 =head1 DESCRIPTION
 
@@ -50,7 +49,7 @@ then be converted to HTML, TeX, nroff, etc. as needed.
 
     package MyWebApp;
     
-    use HTTP::Validate qw{keywords};
+    use HTTP::Validate qw{:keywords :validators};
     
     define_ruleset( 'filters' => 
         { param => 'lat', valid => DECI_VALUE('-90.0','90.0') },
@@ -190,9 +189,8 @@ string.  You may name them after paths, parameters, functionality ("display",
 
 The rules in a given ruleset are always checked in the order they were
 defined.  Rulesets that are included via L</allow> and L</require> rules are
-checked immediately when the including rule is evaluated, except that a given
-ruleset is checked only once per validation even if it is included multiple
-times.
+checked immediately when the including rule is evaluated.  Each ruleset is
+checked at most once per validation, even if it is included multiple times.
 
 You should be cautious about including multiple parameter rules that
 correspond to the same parameter name, as this can lead to situations where no
@@ -227,11 +225,18 @@ The following three types of rules define the recognized parameter names.
 
     { param => <parameter_name>, valid => <validator> ... }
 
-If the specified parameter is present, then its value must pass one of the
-specified validators.  If it passes any of them, the rest are ignored.  If it
-does not pass any of them, then an appropriate error message will be
-generated.  If no validators are specified, then the value will be accepted no
-matter what it is.
+If the specified parameter is present with a non-empty value, then its value
+must pass one of the specified validators.  If it passes any of them, the rest
+are ignored.  If it does not pass any of them, then an appropriate error
+message will be generated.  If no validators are specified, then the value
+will be accepted no matter what it is.
+
+If the specified parameter is present and its value is valid, then the
+containing ruleset will be marked as "fulfilled".  You could use this, for
+example, with a query URL in order to require that the query not be empty
+but instead contain at least one significant criterion.  The parameters that
+count as "significant" would be declared by C<param> rules, the others by
+C<optional> rules.
 
 =head4 optional
 
@@ -247,10 +252,11 @@ validating URL parameters, especially for GET requests.
 
     { mandatory => <parameter_name>, valid => <validator> ... }
 
-A C<mandatory> rule is identical to a C<param> rule, except that the parameter
-is required to be present with a non-empty value.  If it is not, then an error
-message will be generated.  This kind of rule can be useful when validating
-HTML form parameters.
+A C<mandatory> rule is identical to a C<param> rule, except that this
+parameter is required to be present with a non-empty value regardless of the
+presence or absence of other parameters.  If it is not, then an error message
+will be generated.  This kind of rule can be useful when validating HTML form
+submissions, for use with fields such as "name" that must always be filled in.
 
 =head3 parameter constraint rules
 
@@ -290,9 +296,9 @@ This allows you, for example, to define rulesets for validating different
 groups of parameters and then combine them into specific rulesets for use with
 different URL paths.
 
-It is okay for an included ruleset to itself include other rulesets.  However,
-any given ruleset is checked only once per validation no matter how many times
-it is included.
+It is okay for an included ruleset to itself include other rulesets.  A given
+ruleset is checked at most once per validation no matter how many times it is
+included.
 
 =head4 allow
 
@@ -300,7 +306,8 @@ it is included.
 
 A rule of this type is essentially an 'include' statement.  If this rule is
 encountered during a validation, it causes the named ruleset to be checked
-immediately.  It must pass, but does not have to be fulfilled.
+immediately.  The parameters must pass against this ruleset, but it does not
+have to be fulfilled.
 
 =head4 require
 
@@ -308,10 +315,10 @@ immediately.  It must pass, but does not have to be fulfilled.
 
 This is a variant of C<allow>, with an additional constraint.  The validation
 will fail unless the named ruleset not only passes but is also fulfilled by
-the parameters.  You could use this, for example, with a query-type URL in
-order to require that the query not be empty but instead contain at least one
+the parameters.  You could use this, for example, with a query URL in order to
+require that the query not be empty but instead contain at least one
 significant criterion.  The parameters that count as "significant" would be
-declared by C<param> rules, the others by C<optional> rules.
+declared by L</param> rules, the others by L</optional> rules.
 
 =head3 inclusion constraint rules
 
@@ -323,10 +330,10 @@ inclusion of rulesets.
     { require_one => [ <ruleset_name> ... ] }
 
 You can use a rule of this type to place an additional constraint on a list of
-rulesets already included with C<allow> rules.  Exactly one of the named
-rulesets must be fulfilled, or else the request is rejected.  You can use
-this, for example, to ensure that a request includes either a parameter from
-group A or one from group B, but not both.
+rulesets already included with L<inclusion rules|/inclusion rules>.  Exactly
+one of the named rulesets must be fulfilled, or else the request is rejected.
+You can use this, for example, to ensure that a request includes either a
+parameter from group A or one from group B, but not both.
 
 =head4 require_any
 
@@ -398,11 +405,13 @@ overriding the default message.  For example:
           errmsg => "you must specify either of the parameters 'name' or 'id'" });
 
 Error messages may include any of the following placeholders: C<{param}>,
-C<{value}>.  When included with a parameter rule these are replaced by the
-parameter name and original parameter value(s), single-quoted.  When used with other
-rules, {param} is replaced by the full list of relevant parameters or ruleset
-names, quoted and separated by commas.  This feature allows you to define
-common messages once and use them with multiple rules.
+C<{value}>.  When used in a parameter rule these are replaced respectively by
+the parameter name and original parameter value(s), single-quoted.  When used
+with other rules, {param} is replaced by the full list of relevant parameters
+or ruleset names, quoted and separated by commas.  This feature allows you to
+define messages that quote the actual parameter values presented in the
+request, as well as to define common messages and use them with multiple
+rules.
 
 =head3 warn
 
@@ -417,7 +426,7 @@ will be used as the warning message.
 
 =head3 key
 
-The key 'key' specifies the name under which any inforamtion generated by
+The key 'key' specifies the name under which any information generated by
 the rule will be saved. For a parameter rule, the cleaned value will be saved
 under this name.  For all rules, any generated warnings or errors will be
 stored under the specified name instead of the parameter name or rule number.
@@ -498,12 +507,11 @@ with an appropriate error message unless L</multiple> is also specified.
 
 This directive specifies a subroutine which will be used to modify the
 parameter values.  This routine will be called with the raw value of the
-parameter named in this rule as its only argument, or once for each value if
-the multiple values are allowed.  The resulting values will be stored as the
-"cleaned" values.  The value of this directive may be a code ref, or one of
-the strings 'uc', 'lc' or 'fc'.  These direct that the parameter values be
-converted to uppercase, lowercase, or L<fold case|Unicode::Casefold>
-respectively.
+parameter as its only argument, once for each value if multiple values are
+allowed.  The resulting values will be stored as the "cleaned" values.  The
+value of this directive may be either a code ref or one of the strings 'uc',
+'lc' or 'fc'.  These direct that the parameter values be converted to
+uppercase, lowercase, or L<fold case|Unicode::CaseFold> respectively.
 
 =head3 default
 
@@ -529,9 +537,9 @@ by ordinary paragraphs.  Each parameter rule will generate one item, whose body
 consists of the documentation strings immediately following the rule
 definition.  Ordinary paragraphs (see below) can be used to separate the
 parameters into groups for documentation purposes, or at the start or end of a
-list as introductory or concluding documentation.  Each C<require> or C<allow>
-rule causes the documentation for the indicated ruleset(s) to be interpolated
-(except as noted below).  Note that this subsidiary documentation will not be
+list as introductory or concluding material.  Each L</require> or L</allow>
+rule causes the documentation for the indicated ruleset(s) to be interpolated,
+except as noted below.  Note that this subsidiary documentation will not be
 nested.  All of the parameters will be documented at the same list indentation
 level, whether or not they are defined in subsidiary rulesets.
 
@@ -558,7 +566,8 @@ body or ordinary paragraph).
 =item C<!>
 
 Any documentation generated for the preceding rule definition (which could be
-a parameter rule or an C<allow> or C<require>) will be suppressed.  The
+a parameter rule or an C<allow> or C<require>) will be suppressed.  This
+causes the associated parameter(s) to be effectively undocumented.  The
 remainder of the string is treated as a comment and ignored.  This allows for
 auto-generation of documentation while still allowing your program to accept
 undocumented parameters.
@@ -696,7 +705,7 @@ This keyword defines a set of rules to be used for validating parameters.  The
 first argument is the ruleset's name, which must be unique within its
 namespace.  The rest of the parameters must be either hashrefs,
 each of which defines a single rule, or strings, which will be used in generating
-documentation.  For examples, see above.
+L<documentation|/Documentation>.  For examples, see above.
 
 =cut
 
@@ -857,8 +866,8 @@ sub validation_settings {
 	# then do something
     }
 
-This function returns true if the specified ruleset has been defined, false
-otherwise. 
+This function returns true if a ruleset has been defined with the given name,
+false otherwise.
 
 =cut
 
@@ -1203,7 +1212,7 @@ sub add_rules {
 		    unless $CATEGORY{$type} eq 'param';
 		
 		croak "the value of '$key' must be a string or a regexp"
-		    if ref $value and reftype $value ne 'REGEXP';
+		    if ref $value and ref $value ne 'Regexp';
 		
 		$rr->{multiple} = 1;
 		
@@ -1701,7 +1710,7 @@ sub new_execution {
     croak "the second parameter to check_params() must be a hashref if defined"
 	if defined $context && (!ref $context || reftype $context ne 'HASH');
     
-    $context //= {};
+    $context = {} unless defined $context;
     
     croak "the third parameter to check_params() must be a hashref or listref"
 	unless ref $input_params;
@@ -2138,7 +2147,8 @@ sub validate_ruleset {
 	    
 	    elsif ( @raw_values && defined $rr->{bad_value} )
 	    {
-		$vr->{clean}{$key} //= $rr->{bad_value};
+		$vr->{clean}{$key} = $rr->{bad_value}
+		    unless defined $vr->{clean}{$key};
 	    }
 	    
 	    # Set the status of this parameter to 1 (passed) unless an error
@@ -2482,7 +2492,8 @@ sub passed {
 
 =head3 errors
 
-Returns any error messages that were generated by the validation.  If an
+In a scalar context, this returns the number of errors generated by this
+validation.  In a list context, it returns a list of error messages.  If an
 argument is given, only messages whose key equals the argument are returned.
 
 =cut
@@ -2680,9 +2691,8 @@ reference to a function of your own.
 
 =head3 INT_VALUE
 
-This validator accepts any integer, and rejects all other values.  It returns
-as the cleaned value the result generated by adding 0 to the parameter value
-string.
+This validator accepts any integer, and rejects all other values.  It
+returns a numeric value, generated by adding 0 to the raw parameter value.
 
 =head3 INT_VALUE(min,max)
 
@@ -2756,12 +2766,12 @@ This validator accepts any decimal number, including exponential notation, and
 rejects all other values.  It returns a numeric value, generated by adding 0
 to the parameter value.
 
-=head3 DECI_VALUE(x,y)
+=head3 DECI_VALUE(min,max)
 
-This validator accepts any real number between x and y (inclusive).  Specify x
-and y in quotes (i.e. as string arguments) if non-zero so that they will
-appear properly in error messages.  If either x or y is undefined or the empty
-string, that bound will not be tested.
+This validator accepts any real number between C<min> and C<max> (inclusive).
+Specify these bounds in quotes (i.e. as string arguments) if non-zero so that
+they will appear properly in error messages.  If either C<min> or C<max> is
+undefined, that bound will not be tested.
 
 =cut
 
@@ -2836,10 +2846,11 @@ sub MATCH_VALUE {
 =head3 ENUM_VALUE(string,...)
 
 This validator accepts any of the specified string values, and rejects all
-others.  Comparisons are case insensitive.  If the current version of Perl is
-5.016 or greater, or if the module C<Unicode::Casefold> is available and has
-been required, then the C<fc> function will be used instead of the usual C<lc>
-when comparing values.
+others.  Comparisons are case insensitive.  If the version of Perl is 5.016 or
+greater, or if the module C<Unicode::Casefold> is available and has been
+required, then the C<fc> function will be used instead of the usual C<lc> when
+comparing values.  The cleaned value will be the matching string value from
+this call.
 
 =cut
 
@@ -2976,7 +2987,7 @@ many times, to save space you may want to instantiate the validator just once:
 
 If you wish to validate parameters which do not match any of the validators
 described above, you can write your own validator function.  Validator
-functions are called with the two arguments:
+functions are called with two arguments:
 
     ($value, $context)
 
@@ -2986,7 +2997,7 @@ provided).  This allows the passing of information such as database handles to
 the validator functions.
 
 If your function decides that the parameter value is valid and does not need
-to be cleaned, it can simply return an empty result.
+to be cleaned, it can indicate this by returning an empty result.
 
 Otherwise, it must return a hash reference with one or more of the following
 keys: 
@@ -3014,7 +3025,9 @@ If the parameter value is acceptable but questionable in some way, the value
 of this key should be a message that states what a good value should look
 like.  All such messages will be made available through the result object that
 is returned by the validation routine.  The code that handles the request may
-then choose to display these messages as part of the response.
+then choose to display these messages as part of the response.  Your code may
+also make use of this information during the process of responding to the
+request.
 
 =item value
 
@@ -3022,10 +3035,9 @@ If the parameter value represents anything other than a simple string (i.e. a
 number, list, or more complicated data structure), then the value of this key
 should be the converted or "cleaned" form of the parameter value.  For
 example, a numeric parameter might be converted into an actual number by
-adding zero to it, or a pair of values might be split apart and converted
-into an array ref.  The value of this key will be returned by the validation
-function as the value of the parameter, instead of the original string
-provided in the request.
+adding zero to it, or a pair of values might be split apart and converted into
+an array ref.  The value of this key will be returned as the "cleaned" value
+of the parameter, in place of the raw parameter value provided in the request.
 
 =back
 

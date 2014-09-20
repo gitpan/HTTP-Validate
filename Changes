@@ -1,5 +1,27 @@
 Revision history for HTTP-Validate
 
+0.45    2014-09-20 02:03:21 UTC
+        
+        - Many fixes to the documentation
+        
+        - A few code changes so that this distribution works properly under perl 5.8.1
+
+0.44    2014-09-18 21:54:59 UTC
+       
+      	- New method 'list_params'
+        
+        - Method 'document_params' now returns undef if the specified ruleset
+          was never defined, instead of dieing.
+        
+        - Validator 'EMPTY_VALUE' has been eliminated
+        
+        - Validator 'FLAG_VALUE' now accepts boolean values
+        
+        - New rule attribute 'clean'
+        
+        - New validation setting 'ignore_unrecognized'
+         
 0.42    2014-06-16 03:53:04 UTC
-	Fixed a bug which was causing crashes with constraint rules.
+        
+        - Fixed a bug which was causing crashes with constraint rules.
 
